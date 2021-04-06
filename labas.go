@@ -15,7 +15,8 @@ const (
 	baseURL    = "https://mano.labas.lt"
 	loginRoute = "/prisijungimo_patikrinimas"
 
-	// How many times client attempts to send SMS, trying to relogin after an unsuccessful attempt.
+	// How many times client attempts to send SMS, trying to relogin after an
+	// unsuccessful attempt.
 	attempts = 2
 
 	// Regex expression for SMS token.
@@ -30,7 +31,8 @@ type client struct {
 	http  *http.Client // A HTTP client used for performing requests.
 }
 
-// Client is a simple Labas client that can send SMS messages using Labas web services.
+// Client is a simple Labas client that can send SMS messages using Labas web
+// services.
 type Client interface {
 	// SetHTTPClient sets a new HTTP client.
 	SetHTTPClient(http *http.Client)
@@ -39,7 +41,8 @@ type Client interface {
 	SendSMS(rec string, msg string) error
 }
 
-// NewClient creates a new Labas client with a given username (phone number) and password, that uses http.DefaultClient.
+// NewClient creates a new Labas client with a given username (phone number) and
+// password, that uses http.DefaultClient.
 func NewClient(user string, pass string) Client {
 	return &client{
 		user: user,
@@ -55,7 +58,8 @@ func (cl *client) SetHTTPClient(http *http.Client) {
 
 // SendSMS sends a message to a recipient, returns nil if successful.
 //
-// Tries multiple times (if unsuccessful), performing relogin after each unsuccessful attempt.
+// Tries multiple times (if unsuccessful), performing relogin after each
+// unsuccessful attempt.
 func (cl *client) SendSMS(rec string, msg string) error {
 	// Login if first time
 	if cl.token == "" {
@@ -96,7 +100,8 @@ func (cl *client) sendSMS(rec string, msg string) (sent bool, err error) {
 		"sms_submit[_token]":          {cl.token},
 	}.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, baseURL, strings.NewReader(data))
+	req, err := http.NewRequest(http.MethodPost, baseURL,
+		strings.NewReader(data))
 	if err != nil {
 		return
 	}
@@ -121,7 +126,8 @@ func (cl *client) sendSMS(rec string, msg string) (sent bool, err error) {
 	return
 }
 
-// login into mano.labas.lt, saving scml cookie and token needed for SMS sending.
+// login into mano.labas.lt, saving scml cookie and token needed for SMS
+// sending.
 func (cl *client) login() error {
 	if err := cl.renewSCML(); err != nil {
 		return err
@@ -134,14 +140,16 @@ func (cl *client) login() error {
 	return nil
 }
 
-// renewSCML performs an actual login and gets a scml cookie that is used for auth purposes by Labas.
+// renewSCML performs an actual login and gets a scml cookie that is used for
+// authorization purposes by Labas.
 func (cl *client) renewSCML() error {
 	data := url.Values{
 		"_username": {cl.user},
 		"_password": {cl.pass},
 	}.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+loginRoute, strings.NewReader(data))
+	req, err := http.NewRequest(http.MethodPost, baseURL+loginRoute,
+		strings.NewReader(data))
 	if err != nil {
 		return err
 	}
