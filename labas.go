@@ -32,7 +32,10 @@ type client struct {
 
 // Client is a simple Labas client that can send SMS messages using Labas web services.
 type Client interface {
+	// SetHTTPClient sets a new HTTP client.
 	SetHTTPClient(http *http.Client)
+
+	// SendSMS sends a message to a recipient, returns nil if successful.
 	SendSMS(rec string, msg string) error
 }
 
@@ -46,11 +49,11 @@ func NewClient(user string, pass string) Client {
 }
 
 // SetHTTPClient sets a new HTTP client.
-func (cl *client) SetHTTPClient(c *http.Client) {
-	cl.http = c
+func (cl *client) SetHTTPClient(http *http.Client) {
+	cl.http = http
 }
 
-// SendSMS sends a message to a recipient, returns nil if sent.
+// SendSMS sends a message to a recipient, returns nil if successful.
 //
 // Tries multiple times (if unsuccessful), performing relogin after each unsuccessful attempt.
 func (cl *client) SendSMS(rec string, msg string) error {
@@ -68,6 +71,7 @@ func (cl *client) SendSMS(rec string, msg string) error {
 		}
 
 		if sent {
+			// Exit if successful
 			return nil
 		}
 
