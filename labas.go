@@ -18,9 +18,6 @@ const (
 	// How many times client attempts to send SMS, trying to relogin after an
 	// unsuccessful attempt.
 	attempts = 2
-
-	// Regex expression for SMS token.
-	tokenExpr = `<input.+?name="sms_submit\[_token\]".*?value="(.*?)".*?/>`
 )
 
 type client struct {
@@ -40,6 +37,10 @@ type Client interface {
 	// SendSMS sends a message to a recipient, returns nil if successful.
 	SendSMS(rec string, msg string) error
 }
+
+var ErrUnableToSendSMS = errors.New("labas: unable to send sms")
+var ErrUnableToGetSCML = errors.New("labas: unable to get scml")
+var ErrUnableToGetToken = errors.New("labas: unable to get token")
 
 // NewClient creates a new Labas client with a given username (phone number) and
 // password, that uses http.DefaultClient.
@@ -87,7 +88,7 @@ func (cl *client) SendSMS(rec string, msg string) error {
 		}
 	}
 
-	return errors.New("labas: unable to send sms")
+	return ErrUnableToSendSMS
 }
 
 // sendSMS performs the requests to send sms, returns sent true if successful.
@@ -170,8 +171,10 @@ func (cl *client) renewSCML() error {
 		}
 	}
 
-	return errors.New("labas: unable to get scml")
+	return ErrUnableToGetSCML
 }
+
+var tokenRegex = regexp.MustCompile(`<input.+?name=\"sms_submit\[_token\]\".*?value=\"(.*?)\".*?\/>`)
 
 // renewToken gets a token used for sending SMS messages.
 //
@@ -196,14 +199,9 @@ func (cl *client) renewToken() error {
 	}
 
 	// Extract SMS token from homepage
-	re, err := regexp.Compile(tokenExpr)
-	if err != nil {
-		return err
-	}
-
-	match := re.FindSubmatch(body)
+	match := tokenRegex.FindSubmatch(body)
 	if match == nil || len(match) < 2 {
-		return errors.New("labas: unable to get token")
+		return ErrUnableToGetToken
 	}
 
 	cl.token = string(match[1])
