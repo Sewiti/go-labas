@@ -1,6 +1,7 @@
 # go-labas
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/sewiti/go-labas.svg)](https://pkg.go.dev/github.com/sewiti/go-labas)
+[![Build](https://github.com/sewiti/go-labas/actions/workflows/build.yml/badge.svg)](https://github.com/sewiti/go-labas/actions/workflows/build.yml)
 
 A simple package that let's you send SMS messages using [LT Labas](https://www.labas.lt/)
 mobile carrier's website.
