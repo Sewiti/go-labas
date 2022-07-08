@@ -2,190 +2,161 @@ package labas
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
-	"regexp"
 	"strings"
+	"sync"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
-const (
-	baseURL    = "https://mano.labas.lt"
-	loginRoute = "/prisijungimo_patikrinimas"
+var (
+	ErrSendSMS = errors.New("send sms")
+	ErrLogin   = errors.New("login")
+)
 
-	// How many times client attempts to send SMS, trying to relogin after an
+type Client interface {
+	// SendSMS sends a message to a recipient, returns nil if successful.
+	//
+	// Tries multiple times (if unsuccessful), performing relogin after each
 	// unsuccessful attempt.
-	attempts = 2
-)
+	SendSMS(recipient, message string) error
+
+	// SendSMSContext sends a message to a recipient, returns nil if successful.
+	//
+	// Tries multiple times (if unsuccessful), performing relogin after each
+	// unsuccessful attempt.
+	SendSMSContext(ctx context.Context, recipient, message string) error
+}
 
 type client struct {
-	user  string       // Username (phone number).
-	pass  string       // User's password.
-	token string       // A token used for sending SMS.
-	scml  string       // A cookie used for authentication.
-	http  *http.Client // A HTTP client used for performing requests.
+	username string
+	password string
+
+	attempts   int
+	baseURL    string
+	loginRoute string
+
+	http  *http.Client
+	token string
+
+	mx sync.Mutex
 }
 
-// Client is a simple Labas client that can send SMS messages using Labas web
-// services.
-type Client interface {
-	// SetHTTPClient sets a new HTTP client.
-	SetHTTPClient(http *http.Client)
-
-	// SendSMS sends a message to a recipient, returns nil if successful.
-	SendSMS(rec string, msg string) error
-}
-
-var ErrUnableToSendSMS = errors.New("labas: unable to send sms")
-var ErrUnableToGetSCML = errors.New("labas: unable to get scml")
-var ErrUnableToGetToken = errors.New("labas: unable to get token")
-
-// NewClient creates a new Labas client with a given username (phone number) and
-// password, that uses http.DefaultClient.
-func NewClient(user string, pass string) Client {
+func NewClient(username, password string) *client {
+	jar, _ := cookiejar.New(nil)
 	return &client{
-		user: user,
-		pass: pass,
-		http: http.DefaultClient,
+		username: username,
+		password: password,
+
+		attempts:   2,
+		baseURL:    "https://mano.labas.lt",
+		loginRoute: "/prisijungimo_patikrinimas",
+
+		http: &http.Client{Jar: jar},
 	}
 }
 
-// SetHTTPClient sets a new HTTP client.
-func (cl *client) SetHTTPClient(http *http.Client) {
-	cl.http = http
+func (cl *client) SendSMS(recipient, message string) error {
+	return cl.SendSMSContext(context.Background(), recipient, message)
 }
 
-// SendSMS sends a message to a recipient, returns nil if successful.
-//
-// Tries multiple times (if unsuccessful), performing relogin after each
-// unsuccessful attempt.
-func (cl *client) SendSMS(rec string, msg string) error {
-	// Login if first time
+func (cl *client) SendSMSContext(ctx context.Context, recipient, message string) error {
+	cl.mx.Lock()
+	defer cl.mx.Unlock()
+
 	if cl.token == "" {
-		if err := cl.login(); err != nil {
-			return err
+		if err := cl.login(ctx); err != nil {
+			return fmt.Errorf("labas: %w", err)
 		}
 	}
 
-	for i := 0; i < attempts; i++ {
-		sent, err := cl.sendSMS(rec, msg)
+	for i := 0; i < cl.attempts; i++ {
+		sent, err := cl.sendSMS(ctx, recipient, message)
 		if err != nil {
-			return err
+			return fmt.Errorf("labas: %w", err)
 		}
-
 		if sent {
-			// Exit if successful
 			return nil
 		}
 
-		if i < attempts-1 {
-			// Try relogging in, maybe tokens have expired
-			if err := cl.login(); err != nil {
-				return err
+		if i < cl.attempts-1 {
+			if err := cl.login(ctx); err != nil {
+				return fmt.Errorf("labas: %w", err)
 			}
 		}
 	}
-
-	return ErrUnableToSendSMS
+	return fmt.Errorf("labas: %w: ", ErrSendSMS)
 }
 
 // sendSMS performs the requests to send sms, returns sent true if successful.
-//
-// If error occurs, sent is always false.
-func (cl *client) sendSMS(rec string, msg string) (sent bool, err error) {
+func (cl *client) sendSMS(ctx context.Context, recipient, message string) (bool, error) {
 	data := url.Values{
-		"sms_submit[recipientNumber]": {rec},
-		"sms_submit[textMessage]":     {msg},
+		"sms_submit[recipientNumber]": {recipient},
+		"sms_submit[textMessage]":     {message},
 		"sms_submit[_token]":          {cl.token},
 	}.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, baseURL,
-		strings.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cl.baseURL, strings.NewReader(data))
 	if err != nil {
-		return
+		return false, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Cookie", fmt.Sprintf("scml=%s", cl.scml))
 
 	res, err := cl.http.Do(req)
 	if err != nil {
-		return
+		return false, err
 	}
 	defer res.Body.Close()
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return
+		return false, nil
 	}
-
-	if bytes.Contains(body, []byte("SMS išsiųsta")) {
-		sent = true
-	}
-
-	return
+	return bytes.Contains(body, []byte("SMS išsiųsta")), nil
 }
 
-// login into mano.labas.lt, saving scml cookie and token needed for SMS
-// sending.
-func (cl *client) login() error {
-	if err := cl.renewSCML(); err != nil {
-		return err
+func (cl *client) login(ctx context.Context) error {
+	if err := cl.login1(ctx); err != nil {
+		return fmt.Errorf("%w: %v", ErrLogin, err)
 	}
-
-	if err := cl.renewToken(); err != nil {
-		return err
+	if err := cl.login2(ctx); err != nil {
+		return fmt.Errorf("%w: %v", ErrLogin, err)
 	}
-
 	return nil
 }
 
-// renewSCML performs an actual login and gets a scml cookie that is used for
-// authorization purposes by Labas.
-func (cl *client) renewSCML() error {
+func (cl *client) login1(ctx context.Context) error {
 	data := url.Values{
-		"_username": {cl.user},
-		"_password": {cl.pass},
+		"_username": {cl.username},
+		"_password": {cl.password},
 	}.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+loginRoute,
-		strings.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cl.baseURL+cl.loginRoute, strings.NewReader(data))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Cookie", "scml=; TS011605d9=0")
 
 	res, err := cl.http.Do(req)
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
-
-	// Get scml cookie
-	for _, cookie := range res.Cookies() {
-		if cookie.Name == "scml" {
-			cl.scml = cookie.Value
-			return nil
-		}
-	}
-
-	return ErrUnableToGetSCML
+	err = res.Body.Close()
+	return err
 }
 
-var tokenRegex = regexp.MustCompile(`<input.+?name=\"sms_submit\[_token\]\".*?value=\"(.*?)\".*?\/>`)
-
-// renewToken gets a token used for sending SMS messages.
-//
-// Requires valid scml cookie to be successful.
-func (cl *client) renewToken() error {
-	// Get homepage
-	req, err := http.NewRequest(http.MethodGet, baseURL, nil)
+func (cl *client) login2(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cl.baseURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Cookie", fmt.Sprintf("scml=%s", cl.scml))
 
 	res, err := cl.http.Do(req)
 	if err != nil {
@@ -193,18 +164,71 @@ func (cl *client) renewToken() error {
 	}
 	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(res.Body)
+	n, err := html.Parse(res.Body)
 	if err != nil {
 		return err
 	}
 
-	// Extract SMS token from homepage
-	match := tokenRegex.FindSubmatch(body)
-	if match == nil || len(match) < 2 {
-		return ErrUnableToGetToken
+	token, err := getSMSToken(n)
+	if err != nil {
+		return err
+	}
+	cl.token = token
+	return nil
+}
+
+func getSMSToken(n *html.Node) (string, error) {
+	// Looking for:
+	//  <input
+	//      type="hidden"
+	//      id="sms_submit__token"
+	//      name="sms_submit[_token]"
+	//      value="pXoZYkVsiTmj0KFuILwx4EBFbtCY2PK0JHqWinrXuO4"
+	//      class="form-control input-material" />
+	n = traverseHtmlNode(n, func(n *html.Node) bool {
+		if n.DataAtom != atom.Input {
+			return false
+		}
+		for _, attr := range n.Attr {
+			if attr.Key == "name" {
+				return attr.Val == "sms_submit[_token]"
+			}
+		}
+		return false
+	})
+	if n == nil {
+		return "", errors.New("input sms_submit[_token]: not found")
 	}
 
-	cl.token = string(match[1])
+	for _, attr := range n.Attr {
+		if attr.Key == "value" {
+			return attr.Val, nil
+		}
+	}
+	return "", errors.New("input sms_submit[_token]: value attribute not found")
+}
 
+func traverseHtmlNode(n *html.Node, fn func(*html.Node) bool) *html.Node {
+	var q []*html.Node
+	pop := func() *html.Node {
+		i := len(q) - 1
+		if i < 0 {
+			return nil
+		}
+		n := q[i]
+		q = q[:i]
+		return n
+	}
+	for ; n != nil; n = pop() {
+		if fn(n) {
+			return n
+		}
+		if n.NextSibling != nil {
+			q = append(q, n.NextSibling)
+		}
+		if n.FirstChild != nil {
+			q = append(q, n.FirstChild)
+		}
+	}
 	return nil
 }
