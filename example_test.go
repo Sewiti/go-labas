@@ -1,24 +1,25 @@
 package labas
 
 import (
-	"testing"
+	"fmt"
+	"os"
 )
 
-func TestSendSMS(t *testing.T) {
+func ExampleClient_SendSMS() {
 	const (
-		user = "USERNAME"
-		pass = "PASSWORD"
+		user = "LABAS_USERNAME"
+		pass = "LABAS_PASSWD"
 		rec  = "RECIPIENT"
 	)
 
 	cl := NewClient(user, pass)
 
 	if err := cl.SendSMS(rec, "Test"); err != nil {
-		t.Error(err)
-		t.FailNow()
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	if err := cl.SendSMS(rec, "Test 2"); err != nil {
-		t.Error(err)
-		t.FailNow()
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
