@@ -49,7 +49,7 @@ type client struct {
 	mx sync.Mutex
 }
 
-func NewClient(username, password string) *client {
+func NewClient(username, password string) Client {
 	jar, _ := cookiejar.New(nil)
 	return &client{
 		username: username,
